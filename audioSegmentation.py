@@ -3,11 +3,31 @@ from sklearn.cluster import KMeans
 from scipy.ndimage import median_filter, binary_dilation
 import scipy.signal as sps
 
+try:
+    from .constants import (
+        DEFAULT_FRAME_LENGTH,
+        DEFAULT_HOP_LENGTH,
+        DEFAULT_N_FFT,
+    )
+except ImportError:  # pragma: no cover - fallback for alternate package names
+    try:
+        from audio.constants import (  # type: ignore
+            DEFAULT_FRAME_LENGTH,
+            DEFAULT_HOP_LENGTH,
+            DEFAULT_N_FFT,
+        )
+    except ImportError:  # pragma: no cover - final fallback for script usage
+        from constants import (  # type: ignore
+            DEFAULT_FRAME_LENGTH,
+            DEFAULT_HOP_LENGTH,
+            DEFAULT_N_FFT,
+        )
+
 
 def segment_speech(
     y: np.ndarray, sr: int,
     # K-means base (energía)
-    n_fft: int = 512, hop_length: int = 128,
+    n_fft: int = DEFAULT_N_FFT, hop_length: int = DEFAULT_HOP_LENGTH,
     silence_percentile: float = 5, speech_percentile: float = 99,
     smooth_size: int = 1, kmeans_n_init: int = 10, random_state: int = 0,
     beta: float = 1e3, eps: float = 1e-8,
@@ -27,7 +47,7 @@ def segment_speech(
     # DEBUG
     debug: bool = False, debug_save: bool = True, debug_out: str | None = None,
     debug_audio_save: bool = False, debug_basepath: str = "seg_out",
-    stft_nfft: int = 512, stft_hop: int = 128, fmax: float | None = 4000,
+    stft_nfft: int = DEFAULT_N_FFT, stft_hop: int = DEFAULT_HOP_LENGTH, fmax: float | None = 4000,
     db_range: int = 80
 ):
     """
@@ -74,7 +94,14 @@ def segment_speech(
     mask_pitch = np.zeros_like(mask_energy)
     if use_pitch_gate:
         try:
-            f0 = librosa.yin(y, fmin=f0_min, fmax=f0_max, sr=sr, frame_length=max(512, n_fft), hop_length=hop_length)
+            f0 = librosa.yin(
+                y,
+                fmin=f0_min,
+                fmax=f0_max,
+                sr=sr,
+                frame_length=max(DEFAULT_FRAME_LENGTH, n_fft),
+                hop_length=hop_length,
+            )
             mask_pitch = (~np.isnan(f0)).astype(np.uint8)
         except Exception:
             pass

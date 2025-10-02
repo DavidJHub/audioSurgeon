@@ -2,15 +2,23 @@ import glob
 from matplotlib import pyplot as plt
 import pandas as pd
 import soundfile as sf
-from audio.audioOverlapping import detect_overlap_segments
-from audio.audioShazam import detect_signature_from_array,ncc_fft, merge_peaks
 import librosa
-from audio.audioPrepUtils import preprocess_audio_for_vad
-from audio.audioStageSegmentators import cut_dial_start, split_activity_vs_background
 import os
 import numpy as np
 from typing import Iterable, Dict, Any, Optional, List, Tuple
-from audio.measureActivity import vad_energy_adaptive_array
+
+try:
+    from audio.audioOverlapping import detect_overlap_segments
+    from audio.audioShazam import detect_signature_from_array, ncc_fft, merge_peaks
+    from audio.audioPrepUtils import preprocess_audio_for_vad
+    from audio.audioStageSegmentators import cut_dial_start, split_activity_vs_background
+    from audio.measureActivity import vad_energy_adaptive_array
+except ImportError:  # pragma: no cover - allow direct module usage when not installed as package
+    from audioOverlapping import detect_overlap_segments
+    from audioShazam import detect_signature_from_array, ncc_fft, merge_peaks
+    from audioPrepUtils import preprocess_audio_for_vad
+    from audioStageSegmentators import cut_dial_start, split_activity_vs_background
+    from measureActivity import vad_energy_adaptive_array
 
 
 
@@ -79,6 +87,7 @@ def main_process_batch(
     # ventanas de volumen (~3 s) para array["vol_3sec_window"]
     vol_window_sec: float = 3.0,
     vol_hop_sec: Optional[float] = None,
+    summary_excel_path: Optional[str] = None,
 ) -> pd.DataFrame:
     """
     Por archivo:
@@ -322,7 +331,8 @@ def main_process_batch(
     if verbose:
         ok = (df["feats[\"y\"]"].apply(lambda a: isinstance(a, np.ndarray) and a.size > 0)).sum()
         print(f"[main] Listo. {ok}/{len(df)} con audio procesado escrito en '{output_dir}'.")
-    df.to_excel("audio_outputs_test.xlsx")
+    if summary_excel_path:
+        df.to_excel(summary_excel_path)
     return df
 
 if __name__ == "__main__":
@@ -347,11 +357,12 @@ if __name__ == "__main__":
         input_dir="process/FICOHSA_",
         output_dir="process/FICOHSA_/processed",
         template_path=hangup_signature,
-        template_resample_to=8000,       
+        template_resample_to=8000,
         cut_kwargs=cut_kwargs,
         detect_kwargs=detect_kwargs,
         preproc_kwargs=preproc_kwargs,
         preserve_subdirs=True,
         force_wav_out=True,
-        verbose=True
+        verbose=True,
+        summary_excel_path="audio_outputs_test.xlsx",
     )

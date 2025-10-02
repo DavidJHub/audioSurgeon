@@ -1,17 +1,72 @@
+import warnings
+
 import librosa
-from pyannote.audio import Pipeline
-import torch, numpy as np
+import numpy as np
 from typing import Tuple, List
-import database.dbConfig as  dbcfg
+
+try:  # pragma: no cover - optional project-specific dependency
+    import database.dbConfig as dbcfg
+except ImportError:  # pragma: no cover - exercised outside the main project
+    class _DummyCfg:
+        HF_TOKEN = None
+
+    dbcfg = _DummyCfg()  # type: ignore
+
+try:  # pragma: no cover - optional dependency
+    import torch
+except ImportError:  # pragma: no cover - exercised when torch is unavailable
+    torch = None  # type: ignore
+
+try:  # pragma: no cover - optional dependency
+    from pyannote.audio import Pipeline
+    HAVE_PYANONTE = True
+except ImportError:  # pragma: no cover - exercised when pyannote is unavailable
+    Pipeline = None  # type: ignore
+    HAVE_PYANONTE = False
+
+try:
+    from .constants import (
+        DEFAULT_FRAME_LENGTH,
+        DEFAULT_HOP_LENGTH,
+        DEFAULT_N_FFT,
+        DEFAULT_WIN_LENGTH,
+    )
+except ImportError:  # pragma: no cover - compatibility for alternate package names
+    try:
+        from audio.constants import (  # type: ignore
+            DEFAULT_FRAME_LENGTH,
+            DEFAULT_HOP_LENGTH,
+            DEFAULT_N_FFT,
+            DEFAULT_WIN_LENGTH,
+        )
+    except ImportError:  # pragma: no cover - final fallback for script usage
+        from constants import (  # type: ignore
+            DEFAULT_FRAME_LENGTH,
+            DEFAULT_HOP_LENGTH,
+            DEFAULT_N_FFT,
+            DEFAULT_WIN_LENGTH,
+        )
 
 
-PIPE = Pipeline.from_pretrained(
-    "pyannote/overlapped-speech-detection",
-    use_auth_token=dbcfg.HF_TOKEN
-)
+PIPE = None
+if HAVE_PYANONTE:
+    try:  # pragma: no cover - network dependent initialisation
+        PIPE = Pipeline.from_pretrained(
+            "pyannote/overlapped-speech-detection",
+            use_auth_token=dbcfg.HF_TOKEN
+        )
+    except Exception:
+        PIPE = None
 
 def osd_segments_from_array(y: np.ndarray, sr: int):
     """Devuelve [(start, end), ...] con solapamiento (>=2 voces)."""
+    if PIPE is None or torch is None:
+        warnings.warn(
+            "pyannote o torch no están instalados; se omite la detección de solapamiento",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return []
     # pyannote acepta entrada en memoria como dict con "waveform" y "sample_rate"
     wav = torch.from_numpy(y.astype("float32")).unsqueeze(0)  # (1, T)
     out = PIPE({"waveform": wav, "sample_rate": sr})          # :contentReference[oaicite:3]{index=3}
@@ -120,14 +175,14 @@ def detect_overlap_segments(
     assert y.ndim == 1, "Se espera señal mono."
     y = y.astype(np.float32, copy=False)
 
-    hop = 128
-    win = 512
-    n_fft = 512
+    hop = DEFAULT_HOP_LENGTH
+    win = DEFAULT_WIN_LENGTH
+    n_fft = DEFAULT_N_FFT
 
     # Espectrograma
     S = np.abs(librosa.stft(y, n_fft=n_fft, hop_length=hop, win_length=win, window="hann"))
     # Features
-    rms  = librosa.feature.rms(S=S)[0]
+    rms  = librosa.feature.rms(S=S, frame_length=DEFAULT_FRAME_LENGTH)[0]
     dS   = np.diff(S, axis=1)
     flux = np.sqrt((np.clip(dS, 0, None)**2).sum(axis=0))
     flux = np.concatenate([[0.0], flux])
@@ -137,8 +192,12 @@ def detect_overlap_segments(
     voicing = None
     if use_pyin_voicing:
         f0, vflag, vprob = librosa.pyin(
-            y, fmin=librosa.note_to_hz('C2'), fmax=librosa.note_to_hz('C7'),
-            frame_length=win, hop_length=hop, sr=sr
+            y,
+            fmin=librosa.note_to_hz('C2'),
+            fmax=librosa.note_to_hz('C7'),
+            frame_length=win,
+            hop_length=hop,
+            sr=sr,
         )
         voicing = np.nan_to_num(vprob, nan=0.0)
 

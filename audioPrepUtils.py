@@ -1,11 +1,59 @@
+import warnings
+
 import librosa
 import numpy as np
-from pedalboard import Pedalboard, HighpassFilter, LowpassFilter, NoiseGate, Compressor, Limiter, Gain
-from scipy.signal import butter, lfilter
+from scipy.signal import butter, filtfilt, find_peaks, lfilter
 import scipy.signal as sps
-import webrtcvad
 import soundfile as sf
-import pyloudnorm as pyln
+
+try:  # pragma: no cover - optional dependency in some deployments
+    from pedalboard import (
+        Pedalboard,
+        HighpassFilter,
+        LowpassFilter,
+        NoiseGate,
+        Compressor,
+        Limiter,
+        Gain,
+    )
+    HAVE_PEDALBOARD = True
+except ImportError:  # pragma: no cover - exercised when pedalboard is unavailable
+    Pedalboard = HighpassFilter = LowpassFilter = NoiseGate = Compressor = Limiter = Gain = None
+    HAVE_PEDALBOARD = False
+
+try:  # pragma: no cover - optional dependency in some deployments
+    import webrtcvad  # type: ignore
+    HAVE_WEBRTCVAD = True
+except ImportError:  # pragma: no cover - exercised when webrtcvad is unavailable
+    webrtcvad = None  # type: ignore
+    HAVE_WEBRTCVAD = False
+
+try:  # pragma: no cover - optional dependency in some deployments
+    import pyloudnorm as pyln
+    HAVE_PYLOUDNORM = True
+except ImportError:  # pragma: no cover - exercised when pyloudnorm is unavailable
+    pyln = None  # type: ignore
+    HAVE_PYLOUDNORM = False
+
+try:
+    from .constants import (
+        DEFAULT_FRAME_LENGTH,
+        DEFAULT_HOP_LENGTH,
+        DEFAULT_N_FFT,
+    )
+except ImportError:  # pragma: no cover - fall back when packaged differently
+    try:
+        from audio.constants import (  # type: ignore
+            DEFAULT_FRAME_LENGTH,
+            DEFAULT_HOP_LENGTH,
+            DEFAULT_N_FFT,
+        )
+    except ImportError:  # pragma: no cover - final fallback for script usage
+        from constants import (  # type: ignore
+            DEFAULT_FRAME_LENGTH,
+            DEFAULT_HOP_LENGTH,
+            DEFAULT_N_FFT,
+        )
 
 
 def _db_to_lin(db): return 10.0**(db/20.0)
@@ -29,10 +77,6 @@ def butter_bandpass_filter(data, lowcut, highcut, fs, order=5):
     return y
 
 
-import numpy as np
-import librosa, soundfile as sf
-from scipy.signal import butter, filtfilt, find_peaks
-
 # ---------- Parámetros ----------
 SR = 8000
 HP = 1500.0   # Hz
@@ -51,6 +95,14 @@ def _apply_pedalboard_chain(y, sr,
                             gate_thresh_db=None, gate_ratio=3.0, gate_attack_ms=8.0, gate_release_ms=120.0,
                             comp_thresh_db=-28.0, comp_ratio=5.0, comp_attack_ms=10.0, comp_release_ms=100.0,
                             makeup_gain_db=0.0, limit_thresh_db=-2.0, limit_release_ms=60.0):
+
+    if not HAVE_PEDALBOARD:
+        warnings.warn(
+            "pedalboard no está instalado; se omite la cadena de procesamiento",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return y.astype(np.float32, copy=False)
 
     # asegurar frecuencias válidas
     nyq = 0.5 * sr
@@ -81,11 +133,20 @@ def _leveler(y, sr, mode="lufs", target_lufs=-18.0, limiter_ceiling_db=-1.0):
     mode: 'lufs' (requiere pyloudnorm) o 'peak' (normaliza pico).
     """
     y = y.astype(float)
-    if mode == "lufs" and pyln is not None:
-        meter = pyln.Meter(sr)
-        loud = meter.integrated_loudness(y)
-        y = pyln.normalize.loudness(y, loud, target_lufs)
-    else:
+    normalized = False
+    if mode == "lufs":
+        if pyln is None:
+            warnings.warn(
+                "pyloudnorm no está instalado; se aplica normalización por pico",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+        else:
+            meter = pyln.Meter(sr)
+            loud = meter.integrated_loudness(y)
+            y = pyln.normalize.loudness(y, loud, target_lufs)
+            normalized = True
+    if not normalized:
         # Fallback: normaliza a pico -1 dBFS (o al ceiling)
         # (si quieres RMS target, puedes añadirlo aquí)
         peak = np.max(np.abs(y)) + 1e-12
@@ -115,7 +176,7 @@ def preprocess_audio_for_vad(
     pb_comp_attack_ms: float = 10.0, pb_comp_release_ms: float = 100.0,
     pb_makeup_gain_db: float = 0.0, pb_limit_thresh_db: float = -2.0, pb_limit_release_ms: float = 60.0,
     # FEATURES
-    n_fft: int = 512, hop_length: int = 128,
+    n_fft: int = DEFAULT_N_FFT, hop_length: int = DEFAULT_HOP_LENGTH,
     rms_band: tuple[int,int] | None = (300, 3400),  # para métrica de energía
     beta: float = 1e3, eps: float = 1e-8,
     use_pcen: bool = True,
@@ -156,6 +217,14 @@ def preprocess_audio_for_vad(
         auto_gate_db = max(-60.0, min(-30.0, ref_db + 6.0))  # entre -60 y -30 dBFS
 
     # 1) PEDALBOARD
+    if use_pedalboard and not HAVE_PEDALBOARD:
+        warnings.warn(
+            "pedalboard no está instalado; se omite la cadena de procesamiento",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        use_pedalboard = False
+
     if use_pedalboard:
         # clamp LP a Nyquist por si sr=8k (nyq=4k): usa 3400–3800 típico PSTN
         nyq = 0.5*sr
@@ -211,7 +280,7 @@ def preprocess_audio_for_vad(
     pcen_energy = pcen_thr = mel_db = mel_times = mel_freqs = pcen_arr = None
     if use_pcen:
         S = librosa.feature.melspectrogram(
-            y=y_proc, sr=sr, n_fft=max(n_fft, 512), hop_length=hop_length,
+            y=y_proc, sr=sr, n_fft=max(n_fft, DEFAULT_N_FFT), hop_length=hop_length,
             n_mels=pcen_mels, fmin=pcen_fmin, fmax=pcen_fmax or sr//2, power=1.0
         )
         mel_db = librosa.amplitude_to_db(S, ref=1.0)
@@ -228,8 +297,14 @@ def preprocess_audio_for_vad(
     pitch_mask = np.zeros_like(log_rms, dtype=np.uint8)
     if use_pitch_gate:
         try:
-            f0 = librosa.yin(y_proc, fmin=f0_min, fmax=f0_max, sr=sr,
-                             frame_length=max(512, n_fft), hop_length=hop_length)
+            f0 = librosa.yin(
+                y_proc,
+                fmin=f0_min,
+                fmax=f0_max,
+                sr=sr,
+                frame_length=max(DEFAULT_FRAME_LENGTH, n_fft),
+                hop_length=hop_length,
+            )
             pitch_mask = (~np.isnan(f0)).astype(np.uint8)
         except Exception:
             pass
@@ -237,28 +312,35 @@ def preprocess_audio_for_vad(
     # 5) WebRTC VAD (sobre y_proc → resample a 16k si hace falta)
     vad_mask = np.zeros_like(log_rms, dtype=np.uint8)
     if use_webrtcvad:
-        try:
-            import webrtcvad
-            vad = webrtcvad.Vad(vad_aggressiveness)
-            if sr != 16000:
-                y16k = librosa.resample(y_proc, orig_sr=sr, target_sr=16000)
-                sr_v = 16000
-            else:
-                y16k = y_proc.copy(); sr_v = sr
-            y16k = np.clip(y16k, -1, 1)
-            pcm  = (y16k * 32767).astype(np.int16).tobytes()
-            frame_len = int(sr_v * vad_frame_ms / 1000)  # 20ms -> 320 samples @16k
-            step = frame_len
-            frames = [pcm[i*2:(i+frame_len)*2] for i in range(0, len(y16k)-frame_len+1, step)]
-            mask_v = np.array([vad.is_speech(fr, sr_v) for fr in frames], dtype=bool)
+        if not HAVE_WEBRTCVAD:
+            warnings.warn(
+                "webrtcvad no está instalado; se desactiva el VAD complementario",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            use_webrtcvad = False
+        else:
+            try:
+                vad = webrtcvad.Vad(vad_aggressiveness)
+                if sr != 16000:
+                    y16k = librosa.resample(y_proc, orig_sr=sr, target_sr=16000)
+                    sr_v = 16000
+                else:
+                    y16k = y_proc.copy(); sr_v = sr
+                y16k = np.clip(y16k, -1, 1)
+                pcm  = (y16k * 32767).astype(np.int16).tobytes()
+                frame_len = int(sr_v * vad_frame_ms / 1000)  # 20ms -> 320 samples @16k
+                step = frame_len
+                frames = [pcm[i*2:(i+frame_len)*2] for i in range(0, len(y16k)-frame_len+1, step)]
+                mask_v = np.array([vad.is_speech(fr, sr_v) for fr in frames], dtype=bool)
 
-            hop_s     = hop_length / sr
-            vad_times = np.arange(len(mask_v)) * (vad_frame_ms/1000.0)
-            feat_len  = len(log_rms)
-            feat_times = np.arange(feat_len) * hop_s
-            vad_mask  = (np.interp(feat_times, vad_times, mask_v.astype(float), left=0, right=0) >= 0.5).astype(np.uint8)
-        except Exception:
-            pass
+                hop_s     = hop_length / sr
+                vad_times = np.arange(len(mask_v)) * (vad_frame_ms/1000.0)
+                feat_len  = len(log_rms)
+                feat_times = np.arange(feat_len) * hop_s
+                vad_mask  = (np.interp(feat_times, vad_times, mask_v.astype(float), left=0, right=0) >= 0.5).astype(np.uint8)
+            except Exception:
+                pass
 
     # DEBUG: guardar etapas
     if debug_audio_save:

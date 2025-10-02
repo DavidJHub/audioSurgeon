@@ -6,6 +6,23 @@ import soundfile as sf
 import scipy.signal as sps
 from typing import List, Tuple, Optional, Union
 
+try:
+    from .constants import (
+        DEFAULT_HOP_LENGTH,
+        DEFAULT_N_FFT,
+    )
+except ImportError:  # pragma: no cover - fallback for alternate package structure
+    try:
+        from audio.constants import (  # type: ignore
+            DEFAULT_HOP_LENGTH,
+            DEFAULT_N_FFT,
+        )
+    except ImportError:  # pragma: no cover - final fallback for script usage
+        from constants import (  # type: ignore
+            DEFAULT_HOP_LENGTH,
+            DEFAULT_N_FFT,
+        )
+
 
 
 
@@ -23,7 +40,7 @@ def cut_dial_start(
     merge_gaps_s=0.05,     # fusiona huecos ≤ 50 ms entre runs
     # debug
     debug=False, debug_save=False, debug_out=None,
-    stft_nfft=512, stft_hop=256, pad_hz=50
+    stft_nfft=DEFAULT_N_FFT, stft_hop=DEFAULT_HOP_LENGTH * 2, pad_hz=50
 ):
     """
     Detecta un tono (~band) al inicio (por envolvente) y corta el audio al final del tono.
