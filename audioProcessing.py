@@ -1,9 +1,7 @@
-"""Convenience CLI for running the audio processing pipeline on a folder of files."""
+"""Simple entry point that runs the audio processing pipeline with preset values."""
 
 from __future__ import annotations
 
-import argparse
-import json
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -11,172 +9,115 @@ from audioPreprocessing import main_process_batch
 from audioShazam import merge_peaks, ncc_fft
 
 
+# Default locations for batch processing. Update these paths to match your project.
+DEFAULT_INPUT_DIR = Path("input_audios")
+DEFAULT_OUTPUT_DIR = Path("processed_audios")
+
+# Template configuration (set to ``None`` when the template stage is not required).
+DEFAULT_TEMPLATE_PATH: Optional[Path] = None
+DEFAULT_TEMPLATE_RESAMPLE_TO: Optional[int] = None
+
+# Overlap/template detection defaults.
 DEFAULT_TEMPLATE_THRESH = 0.5
 DEFAULT_TEMPLATE_MIN_DISTANCE = 0.4
 DEFAULT_TEMPLATE_NMS = 0.25
 
+# Preprocessing stage defaults.
+DEFAULT_PREPROC_KWARGS: Dict[str, Any] = {
+    "use_pedalboard": True,
+    "use_webrtcvad": True,
+    "use_pitch_gate": True,
+}
 
-def _positive_float(value: str) -> float:
-    try:
-        parsed = float(value)
-    except ValueError as exc:  # pragma: no cover - argparse handles messaging
-        raise argparse.ArgumentTypeError(str(exc)) from exc
-    if parsed <= 0:
-        raise argparse.ArgumentTypeError("value must be > 0")
-    return parsed
+# Batch processing behaviour toggles.
+DEFAULT_PRESERVE_SUBDIRS = True
+DEFAULT_OVERWRITE = True
+DEFAULT_MONO = True
+DEFAULT_FORCE_WAV_OUT = True
 
+# Loudness trace configuration.
+DEFAULT_VOL_WINDOW_SEC = 3.0
+DEFAULT_VOL_HOP_SEC: Optional[float] = None
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description="Run the audio processing pipeline over a directory of audio files.",
-    )
-    parser.add_argument("input_dir", type=Path, help="Folder containing input audio files")
-    parser.add_argument("output_dir", type=Path, help="Destination folder for processed audio")
-    parser.add_argument(
-        "--template",
-        type=Path,
-        default=None,
-        help="Optional hangup template to use for detection",
-    )
-    parser.add_argument(
-        "--template-resample-to",
-        type=int,
-        default=None,
-        help="If provided, resample the template waveform to this sample rate",
-    )
-    parser.add_argument(
-        "--template-thresh",
-        type=_positive_float,
-        default=DEFAULT_TEMPLATE_THRESH,
-        help="Detection threshold when using a template (default: %(default)s)",
-    )
-    parser.add_argument(
-        "--template-min-distance",
-        type=_positive_float,
-        default=DEFAULT_TEMPLATE_MIN_DISTANCE,
-        help="Minimum separation (seconds) between template detections",
-    )
-    parser.add_argument(
-        "--template-nms-merge",
-        type=_positive_float,
-        default=DEFAULT_TEMPLATE_NMS,
-        help="NMS merge window (seconds) for template detections",
-    )
-    parser.add_argument(
-        "--keep-subdirs",
-        action="store_true",
-        help="Preserve the sub-directory structure under the output folder",
-    )
-    parser.add_argument(
-        "--no-overwrite",
-        dest="overwrite",
-        action="store_false",
-        help="Do not overwrite processed audio that already exists",
-    )
-    parser.add_argument(
-        "--stereo",
-        dest="mono",
-        action="store_false",
-        help="Process audio in stereo instead of converting to mono",
-    )
-    parser.add_argument(
-        "--skip-wav",
-        dest="force_wav_out",
-        action="store_false",
-        help="Keep the original file extension when writing processed audio",
-    )
-    parser.add_argument(
-        "--disable-pedalboard",
-        action="store_true",
-        help="Disable the optional pedalboard processing stage",
-    )
-    parser.add_argument(
-        "--disable-webrtcvad",
-        action="store_true",
-        help="Disable the optional WebRTC VAD refinement stage",
-    )
-    parser.add_argument(
-        "--disable-pitch-gate",
-        action="store_true",
-        help="Disable the optional pitch-based gating stage",
-    )
-    parser.add_argument(
-        "--vol-window",
-        type=_positive_float,
-        default=3.0,
-        help="Window size in seconds for the diagnostic loudness trace",
-    )
-    parser.add_argument(
-        "--vol-hop",
-        type=float,
-        default=None,
-        help="Hop size in seconds for the diagnostic loudness trace (defaults to the window)",
-    )
-    parser.add_argument(
-        "--summary-json",
-        type=Path,
-        default=None,
-        help="Optional path to store the resulting dataframe summary in JSON format",
-    )
-    parser.add_argument(
-        "--summary-excel",
-        type=Path,
-        default=None,
-        help="Optional path to store the resulting dataframe summary in Excel format",
-    )
-    parser.set_defaults(overwrite=True, mono=True, force_wav_out=True)
-    return parser
+# Optional summary export locations.
+DEFAULT_SUMMARY_JSON: Optional[Path] = None
+DEFAULT_SUMMARY_EXCEL: Optional[Path] = None
 
 
-def _build_detect_kwargs(args: argparse.Namespace) -> Optional[Dict[str, Any]]:
-    if args.template is None:
+def _build_detect_kwargs(template_path: Optional[Path]) -> Optional[Dict[str, Any]]:
+    """Return default detection kwargs when a template is provided."""
+
+    if template_path is None:
         return None
+
     return {
-        "thresh": args.template_thresh,
-        "min_distance_sec": args.template_min_distance,
-        "nms_merge_sec": args.template_nms_merge,
+        "thresh": DEFAULT_TEMPLATE_THRESH,
+        "min_distance_sec": DEFAULT_TEMPLATE_MIN_DISTANCE,
+        "nms_merge_sec": DEFAULT_TEMPLATE_NMS,
         "ncc_fft": ncc_fft,
         "merge_peaks": merge_peaks,
     }
 
 
-def _build_preproc_kwargs(args: argparse.Namespace) -> Dict[str, Any]:
-    return {
-        "use_pedalboard": not args.disable_pedalboard,
-        "use_webrtcvad": not args.disable_webrtcvad,
-        "use_pitch_gate": not args.disable_pitch_gate,
-    }
+def run_pipeline(
+    *,
+    input_dir: Path = DEFAULT_INPUT_DIR,
+    output_dir: Path = DEFAULT_OUTPUT_DIR,
+    template_path: Optional[Path] = DEFAULT_TEMPLATE_PATH,
+    template_resample_to: Optional[int] = DEFAULT_TEMPLATE_RESAMPLE_TO,
+    cut_kwargs: Optional[Dict[str, Any]] = None,
+    detect_kwargs: Optional[Dict[str, Any]] = None,
+    preproc_kwargs: Optional[Dict[str, Any]] = None,
+    preserve_subdirs: bool = DEFAULT_PRESERVE_SUBDIRS,
+    overwrite: bool = DEFAULT_OVERWRITE,
+    mono: bool = DEFAULT_MONO,
+    force_wav_out: bool = DEFAULT_FORCE_WAV_OUT,
+    vol_window_sec: float = DEFAULT_VOL_WINDOW_SEC,
+    vol_hop_sec: Optional[float] = DEFAULT_VOL_HOP_SEC,
+    summary_json: Optional[Path] = DEFAULT_SUMMARY_JSON,
+    summary_excel: Optional[Path] = DEFAULT_SUMMARY_EXCEL,
+) -> None:
+    """Execute ``main_process_batch`` using the configured defaults."""
 
+    effective_detect_kwargs = detect_kwargs
+    if effective_detect_kwargs is None:
+        effective_detect_kwargs = _build_detect_kwargs(template_path)
 
-def main(argv: Optional[list[str]] = None) -> None:
-    parser = build_parser()
-    args = parser.parse_args(argv)
-
-    detect_kwargs = _build_detect_kwargs(args)
-    preproc_kwargs = _build_preproc_kwargs(args)
+    effective_preproc_kwargs = DEFAULT_PREPROC_KWARGS.copy()
+    if preproc_kwargs:
+        effective_preproc_kwargs.update(preproc_kwargs)
 
     df = main_process_batch(
-        input_dir=str(args.input_dir),
-        output_dir=str(args.output_dir),
-        template_path=str(args.template) if args.template else None,
-        template_resample_to=args.template_resample_to,
-        cut_kwargs=None,
-        detect_kwargs=detect_kwargs,
-        preproc_kwargs=preproc_kwargs,
-        preserve_subdirs=args.keep_subdirs,
-        overwrite=args.overwrite,
-        mono=args.mono,
-        force_wav_out=args.force_wav_out,
+        input_dir=str(input_dir),
+        output_dir=str(output_dir),
+        template_path=str(template_path) if template_path else None,
+        template_resample_to=template_resample_to,
+        cut_kwargs=cut_kwargs,
+        detect_kwargs=effective_detect_kwargs,
+        preproc_kwargs=effective_preproc_kwargs,
+        preserve_subdirs=preserve_subdirs,
+        overwrite=overwrite,
+        mono=mono,
+        force_wav_out=force_wav_out,
         verbose=True,
-        vol_window_sec=args.vol_window,
-        vol_hop_sec=args.vol_hop,
-        summary_excel_path=str(args.summary_excel) if args.summary_excel else None,
+        vol_window_sec=vol_window_sec,
+        vol_hop_sec=vol_hop_sec,
+        summary_excel_path=str(summary_excel) if summary_excel else None,
     )
 
-    if args.summary_json:
-        args.summary_json.parent.mkdir(parents=True, exist_ok=True)
-        args.summary_json.write_text(df.to_json(orient="records", indent=2, default_handler=str), encoding="utf-8")
+    if summary_json:
+        summary_json.parent.mkdir(parents=True, exist_ok=True)
+        summary_json.write_text(
+            df.to_json(orient="records", indent=2, default_handler=str),
+            encoding="utf-8",
+        )
 
 
-if __name__ == "__main__":  # pragma: no cover - CLI entry point
+def main() -> None:
+    """Run the pipeline with the module defaults."""
+
+    run_pipeline()
+
+
+if __name__ == "__main__":  # pragma: no cover - manual execution helper
     main()

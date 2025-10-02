@@ -9,7 +9,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from audioPrepUtils import preprocess_audio_for_vad
-from audioProcessing import main as process_cli
+from audioProcessing import run_pipeline
 from measureActivity import vad_energy_adaptive_array
 
 
@@ -47,7 +47,7 @@ def test_activity_detector_matches_processed_frames():
     assert all(0 <= start < end <= len(y) / sr for start, end in segments)
 
 
-def test_cli_processes_audio(tmp_path):
+def test_pipeline_processes_audio(tmp_path):
     sr = 8000
     tone = 0.1 * np.sin(2 * np.pi * 440 * np.linspace(0, 1.0, sr, endpoint=False)).astype(np.float32)
 
@@ -61,19 +61,18 @@ def test_cli_processes_audio(tmp_path):
 
     summary_json = tmp_path / "summary.json"
 
-    process_cli([
-        str(input_dir),
-        str(output_dir),
-        "--disable-pedalboard",
-        "--disable-webrtcvad",
-        "--disable-pitch-gate",
-        "--vol-window",
-        "0.5",
-        "--vol-hop",
-        "0.25",
-        "--summary-json",
-        str(summary_json),
-    ])
+    run_pipeline(
+        input_dir=input_dir,
+        output_dir=output_dir,
+        preproc_kwargs={
+            "use_pedalboard": False,
+            "use_webrtcvad": False,
+            "use_pitch_gate": False,
+        },
+        vol_window_sec=0.5,
+        vol_hop_sec=0.25,
+        summary_json=summary_json,
+    )
 
     assert summary_json.exists()
     data = summary_json.read_text(encoding="utf-8")
