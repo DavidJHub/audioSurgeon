@@ -7,6 +7,14 @@ from pydub import AudioSegment
 from tqdm import tqdm
 from audio.audioSegmentation import segment_speech
 
+try:
+    from .constants import DEFAULT_HOP_LENGTH, DEFAULT_N_FFT
+except ImportError:  # pragma: no cover - fallback when distributed under "audio"
+    try:
+        from audio.constants import DEFAULT_HOP_LENGTH, DEFAULT_N_FFT  # type: ignore
+    except ImportError:  # pragma: no cover - final fallback for script usage
+        from constants import DEFAULT_HOP_LENGTH, DEFAULT_N_FFT  # type: ignore
+
 
 
 
@@ -109,7 +117,7 @@ def measureDbAmplitude_df(directory, df,time_column,suffix, duration=5):
 
 
 
-def get_snr(audio_path, n_fft=512, hop_length=32):
+def get_snr(audio_path, n_fft: int = DEFAULT_N_FFT, hop_length: int = DEFAULT_HOP_LENGTH):
     """
     Computes the SNR (in dB) over time using the segmentation mask.
 
@@ -152,7 +160,7 @@ def select_rich_window(
     sr: int = 8000,
     win_sec: int = 30,
     hop_sec: int = 10,
-    n_fft: int = 512,
+    n_fft: int = DEFAULT_N_FFT,
     peak_thresh_db: float = -40.0,
 ):
     """
@@ -217,7 +225,11 @@ def select_rich_window(
     return best_start / sr, best_end / sr, y_best
 
 
-def measure_spectral_flatness(audio_path, n_fft=512, hop_length=512):
+def measure_spectral_flatness(
+    audio_path,
+    n_fft: int = DEFAULT_N_FFT,
+    hop_length: int = DEFAULT_HOP_LENGTH,
+):
     """
     Computes spectral flatness for each frame.
 

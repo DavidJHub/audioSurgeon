@@ -3,12 +3,20 @@ from scipy.ndimage import uniform_filter1d
 import librosa, librosa.display, numpy as np
 import matplotlib.pyplot as plt
 
+try:
+    from .constants import DEFAULT_HOP_LENGTH, DEFAULT_N_FFT
+except ImportError:  # pragma: no cover - compatibility with alternate package names
+    try:
+        from audio.constants import DEFAULT_HOP_LENGTH, DEFAULT_N_FFT  # type: ignore
+    except ImportError:  # pragma: no cover - final fallback for script usage
+        from constants import DEFAULT_HOP_LENGTH, DEFAULT_N_FFT  # type: ignore
+
 
 def vad_energy_adaptive(path, win_ms=25, hop_ms=10, p_percentile=60, delta_db=3,
                         min_run_frames=3, smooth_ms=500,returns="segments"):
     y, sr = librosa.load(path, sr=8_000, mono=True)
-    hop = 128
-    win = 512
+    hop = DEFAULT_HOP_LENGTH
+    win = DEFAULT_N_FFT
     rms = librosa.feature.rms(y=y, frame_length=win, hop_length=hop)[0]
     rms_db = librosa.amplitude_to_db(rms, ref=np.max)
 
@@ -210,12 +218,17 @@ if __name__ == "__main__":
     plt.show()
 
     # ----- 2. Espectrograma -----
-    S = np.abs(librosa.stft(y, n_fft=512, hop_length=512))
+    S = np.abs(librosa.stft(y, n_fft=DEFAULT_N_FFT, hop_length=DEFAULT_HOP_LENGTH))
     S_db = librosa.amplitude_to_db(S, ref=np.max)
 
     plt.figure(figsize=(14, 5))
-    librosa.display.specshow(S_db, sr=sr, hop_length=512,
-                            x_axis="time", y_axis="hz")
+    librosa.display.specshow(
+        S_db,
+        sr=sr,
+        hop_length=DEFAULT_HOP_LENGTH,
+        x_axis="time",
+        y_axis="hz",
+    )
     plt.title("Espectrograma (dB)")
     plt.colorbar(format="%+2.0f dB", label="Intensidad")
     plt.tight_layout()
